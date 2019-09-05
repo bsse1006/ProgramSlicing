@@ -19,6 +19,9 @@ public class Operation {
     int marking = 0;
     IVariableBinding s;
     public Set<IVariableBinding> nameSet = new HashSet<>();
+    ASTNode startingNode;
+    Set<ASTNode> nodesForBackwardSlicing = new TreeSet<>(Comparator.comparing(ASTNode::getStartPosition));
+    Set<ASTNode> nodesForForwardSlicing = new TreeSet<>(Comparator.comparing(ASTNode::getStartPosition));
 
     public String readFileToString(String filePath) throws IOException {
         StringBuilder fileData = new StringBuilder(1000);
@@ -485,8 +488,11 @@ public class Operation {
 
             public boolean visit (VariableDeclarationStatement node) {
                 //System.out.println(node.fragments());
+
                 GraphNode temp;
                 temp = new GraphNode(node);
+                startingNode = temp.node;
+
                 temp.parents.add(graphNodeStack.peek());
                 graphNodeStack.peek().children.add(temp);
                 graphNodeStack.add(temp);
@@ -506,14 +512,27 @@ public class Operation {
 
                     public boolean visit (SimpleName child)
                     {
-                        if(marking == 0)
+                        if(child.resolveTypeBinding() instanceof PrimitiveType)
                         {
-                            s = (IVariableBinding) child.resolveBinding();
-                            marking = 1;
+                            if(marking == 0)
+                            {
+                                s = (IVariableBinding) child.resolveBinding();
+                                marking = 1;
+                            }
+                            else
+                            {
+                                nameSet.add((IVariableBinding) child.resolveBinding());
+                            }
                         }
-                        else
+                        return false;
+                    }
+
+                    public boolean visit (QualifiedName child)
+                    {
+                        if(!(child.resolveTypeBinding() instanceof PrimitiveType))
                         {
-                            nameSet.add((IVariableBinding) child.resolveBinding());
+                            System.out.println("asd");
+
                         }
                         return false;
                     }
@@ -577,14 +596,36 @@ public class Operation {
             }
 
             public void endVisit (Assignment node) {
-                for (IVariableBinding v : nameSet)
+                if(nameSet.isEmpty())
                 {
-                    graphNodeStack.peek().getParents().addAll(map.get(v));
-                    for(GraphNode g : map.get(v))
+                    GraphNode tempuNode = null;
+                    for(GraphNode g : map.get(s))
                     {
-                        g.children.add(graphNodeStack.peek());
+                        if(g.node instanceof VariableDeclarationStatement)
+                        {
+                            tempuNode = g;
+                            break;
+                        }
                     }
-                    map.get(s).add(graphNodeStack.peek());
+                    Set<GraphNode> tempuSet = new HashSet<>();
+                    tempuSet.add(tempuNode);
+                    tempuSet.add(graphNodeStack.peek());
+                    map.replace(s,map.get(s),tempuSet);
+
+                    tempuNode.children.add(graphNodeStack.peek());
+                    graphNodeStack.peek().parents.add(tempuNode);
+                }
+                else
+                {
+                    for (IVariableBinding v : nameSet)
+                    {
+                        graphNodeStack.peek().getParents().addAll(map.get(v));
+                        for(GraphNode g : map.get(v))
+                        {
+                            g.children.add(graphNodeStack.peek());
+                        }
+                        map.get(s).add(graphNodeStack.peek());
+                    }
                 }
                 nameSet.clear();
                 marking = 0;
@@ -597,27 +638,111 @@ public class Operation {
 
     }
 
-    void kut (GraphNode node)
+    void recursionForForwardSlicing (GraphNode g)
     {
-        System.out.println(node.node);
+        /*if(g==null)
+            return;*/
 
+        nodesForForwardSlicing.add(g.node);
+
+        for(GraphNode gg : g.children)
+        {
+            recursionForForwardSlicing(gg);
+        }
+    }
+
+    GraphNode getStartingNode (GraphNode node)
+    {
+        GraphNode foundStartingNode = null;
         for(GraphNode g : node.children)
         {
-            System.out.println(i);
-            i++;
-            kut(g);
-            i--;
+            if(g.node.toString().equals(startingNode.toString())&&g.node.getStartPosition()==startingNode.getStartPosition())
+            {
+                return g;
+            }
+            foundStartingNode = getStartingNode(g);
+
+            if(foundStartingNode!=null)
+                break;
         }
+        return foundStartingNode;
+    }
+
+    void recursionForBackwardSlicing (GraphNode g)
+    {
+        if(g.equals(root))
+            return;
+
+        nodesForBackwardSlicing.add(g.node);
+
+        for(GraphNode gg : g.parents)
+        {
+            recursionForBackwardSlicing(gg);
+        }
+    }
+
+    public void parser (String str) {
+
+        ASTParser parser = ASTParser.newParser(AST.JLS3);
+        parser.setSource(str.toCharArray());
+        parser.setKind(ASTParser.K_COMPILATION_UNIT);
+        parser.setResolveBindings(true);
+        parser.setEnvironment(new String[] {"C:\\Users\\ASUS\\Desktop\\demo\\out\\production\\demo"}, new String[] {"C:\\Users\\ASUS\\Desktop\\demo\\src"}, null, true);
+        parser.setUnitName("Saal.java");
+        final CompilationUnit cu = (CompilationUnit) parser.createAST(null);
+
+        cu.accept(new ASTVisitor() {
+
+            public void preVisit (ASTNode node) {
+                if(node instanceof Statement && !(node instanceof Block))
+                {
+                    startingNode = node;
+                    GraphNode foundNode = getStartingNode(root);
+                    System.out.println(foundNode.node);
+                    recursionForBackwardSlicing(foundNode);
+                    recursionForForwardSlicing(foundNode);
+                    System.out.println("Backward slicing:");
+                    for(ASTNode astNode: nodesForBackwardSlicing)
+                    {
+                        System.out.println(astNode);
+                    }
+                    System.out.println("Forward slicing:");
+                    for(ASTNode astNode: nodesForForwardSlicing)
+                    {
+                        System.out.println(astNode);
+                    }
+                    System.out.println("---------------------------------");
+                    nodesForBackwardSlicing.clear();
+                    nodesForForwardSlicing.clear();
+                }
+            }
+
+        });
     }
 
     public void operations () {
         try {
             parse(readFileToString("C:\\Users\\ASUS\\Desktop\\demo\\src\\Saal.java"));
+
+            //kut(root);
+
         } catch (IOException e) {
             e.printStackTrace();
         }
 
-        kut(root);
+        try {
+            parser(readFileToString("C:\\Users\\ASUS\\Desktop\\demo\\src\\Saal.java"));
+
+            //kut(root);
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        /*for(ASTNode n : nodes)
+        {
+            System.out.println(n);
+        }*/
 
     }
 }
